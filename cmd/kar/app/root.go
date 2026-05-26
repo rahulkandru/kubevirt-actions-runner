@@ -18,6 +18,7 @@ package app
 
 import (
 	"context"
+	stdErrors "errors"
 
 	runner "github.com/electrocucaracha/kubevirt-actions-runner/internal"
 	"github.com/electrocucaracha/kubevirt-actions-runner/internal/utils"
@@ -25,7 +26,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func NewRootCommand(ctx context.Context, runner runner.Runner, opts Opts) *cobra.Command {
+// CleanupContextFunc creates the context used to delete runner resources.
+type CleanupContextFunc func(context.Context) (context.Context, context.CancelFunc)
+
+func NewRootCommand(ctx context.Context, runner runner.Runner, opts Opts, cleanupContext CleanupContextFunc) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "kar",
 		Short: "Tool that creates a GitHub Self-Host runner with Kubevirt Virtual Machine Instance",
@@ -33,7 +37,7 @@ func NewRootCommand(ctx context.Context, runner runner.Runner, opts Opts) *cobra
 			return initializeConfig(cmd)
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return run(ctx, runner, opts)
+			return run(ctx, runner, opts, cleanupContext)
 		},
 	}
 
@@ -42,7 +46,7 @@ func NewRootCommand(ctx context.Context, runner runner.Runner, opts Opts) *cobra
 	return cmd
 }
 
-func run(ctx context.Context, runner runner.Runner, opts Opts) error {
+func run(ctx context.Context, runner runner.Runner, opts Opts, cleanupContext CleanupContextFunc) error {
 	log := utils.GetLogger()
 
 	err := runner.CreateResources(ctx, opts.VMTemplate, opts.RunnerName, opts.JitConfig)
@@ -54,12 +58,19 @@ func run(ctx context.Context, runner runner.Runner, opts Opts) error {
 
 	err = runner.WaitForVirtualMachineInstance(ctx)
 	if err != nil {
+		if !stdErrors.Is(errors.Cause(err), context.Canceled) {
+			cleanupErr := deleteResources(ctx, runner, cleanupContext)
+			if cleanupErr != nil {
+				log.Warnf("failed to delete resources after wait failure: %v", cleanupErr)
+			}
+		}
+
 		return errors.Wrap(err, "fail to wait for resources")
 	}
 
 	log.Println("Virtual Machine runner completed successfully")
 
-	err = runner.DeleteResources(ctx)
+	err = deleteResources(ctx, runner, cleanupContext)
 	if err != nil {
 		return errors.Wrap(err, "fail to delete resources")
 	}
@@ -67,4 +78,11 @@ func run(ctx context.Context, runner runner.Runner, opts Opts) error {
 	log.Println("Virtual Machine runner deleted successfully")
 
 	return nil
+}
+
+func deleteResources(ctx context.Context, runner runner.Runner, cleanupContext CleanupContextFunc) error {
+	cleanupCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+
+	return runner.DeleteResources(cleanupCtx)
 }

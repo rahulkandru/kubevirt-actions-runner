@@ -145,6 +145,7 @@ func (rc *KubevirtRunner) CreateResources(ctx context.Context,
 func (rc *KubevirtRunner) WaitForVirtualMachineInstance(ctx context.Context) error {
 	tracer := otel.Tracer("kubevirt-actions-runner/runner")
 
+	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, rc.waitTimeout)
 	defer cancel()
 
@@ -170,6 +171,10 @@ func (rc *KubevirtRunner) WaitForVirtualMachineInstance(ctx context.Context) err
 	for {
 		select {
 		case <-ctx.Done():
+			if parentCtx.Err() != nil {
+				return parentCtx.Err()
+			}
+
 			return errors.New("timeout while waiting for the virtual machine instance")
 		case event, watchOpen := <-watch.ResultChan():
 			if !watchOpen {

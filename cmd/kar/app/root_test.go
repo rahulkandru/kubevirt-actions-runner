@@ -36,6 +36,7 @@ type mock struct {
 	createCalled bool
 	waitCalled   bool
 	deleteCalled bool
+	deleteCtxErr error
 	vmTemplate   string
 	runnerName   string
 	jitConfig    string
@@ -71,8 +72,9 @@ func (m *mock) WaitForVirtualMachineInstance(_ context.Context) error {
 	return m.waitErr
 }
 
-func (m *mock) DeleteResources(_ context.Context) error {
+func (m *mock) DeleteResources(ctx context.Context) error {
 	m.deleteCalled = true
+	m.deleteCtxErr = ctx.Err()
 
 	return m.deleteErr
 }
@@ -86,7 +88,7 @@ var _ = Describe("Root Command", func() {
 
 	BeforeEach(func() {
 		runner = mock{}
-		cmd = app.NewRootCommand(context.TODO(), &runner, opts)
+		cmd = app.NewRootCommand(context.TODO(), &runner, opts, context.WithCancel)
 	})
 
 	DescribeTable("initialization process", func(shouldSucceed bool, failure Failure, args ...string) {
@@ -137,10 +139,6 @@ var _ = Describe("Root Command", func() {
 
 		Expect(runner.waitCalled).Should(BeTrue(), "WaitForVirtualMachineInstance was not called")
 
-		if HasOneOf(failure, Wait) {
-			return
-		}
-
 		Expect(runner.deleteCalled).Should(BeTrue(), "DeleteResources was not called")
 	},
 		Entry("when the default options are provided", true, None),
@@ -151,4 +149,19 @@ var _ = Describe("Root Command", func() {
 		Entry("when the delete failed", false, Delete),
 		Entry("when the wait failed", false, Wait),
 	)
+
+	It("uses the cleanup context when deleting resources", func() {
+		parentCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		cmd = app.NewRootCommand(parentCtx, &runner, opts, func(context.Context) (context.Context, context.CancelFunc) {
+			return context.WithCancel(context.Background())
+		})
+
+		err := cmd.Execute()
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runner.deleteCalled).Should(BeTrue())
+		Expect(runner.deleteCtxErr).NotTo(HaveOccurred())
+	})
 })

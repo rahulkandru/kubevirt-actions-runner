@@ -66,7 +66,7 @@ var _ = Describe("Runner", func() {
 		runner.CancelAppContext()
 	})
 
-	startVMIWatcher := func(karRunner runner.Runner) (*watch.FakeWatcher, chan error) {
+	startVMIWatcherWithContext := func(karRunner runner.Runner, ctx context.Context) (*watch.FakeWatcher, chan error) {
 		fakeWatcher := watch.NewFake()
 
 		vmiInterface := kubecli.NewMockVirtualMachineInstanceInterface(mockCtrl)
@@ -77,12 +77,16 @@ var _ = Describe("Runner", func() {
 		errChan := make(chan error, 1)
 
 		go func() {
-			errChan <- karRunner.WaitForVirtualMachineInstance(context.TODO())
+			errChan <- karRunner.WaitForVirtualMachineInstance(ctx)
 
 			close(errChan)
 		}()
 
 		return fakeWatcher, errChan
+	}
+
+	startVMIWatcher := func(karRunner runner.Runner) (*watch.FakeWatcher, chan error) {
+		return startVMIWatcherWithContext(karRunner, context.TODO())
 	}
 
 	DescribeTable("create resources", func(shouldSucceed bool, vmTemplate, runnerName, jitConfig string) {
@@ -158,11 +162,10 @@ var _ = Describe("Runner", func() {
 
 		phases := [5]v1.VirtualMachineInstancePhase{v1.Pending, v1.Scheduling, v1.Scheduled, v1.Running, lastPhase}
 
-		vmi := NewVirtualMachineInstance(vmInstance)
 		for _, phase := range phases {
+			vmi := NewVirtualMachineInstance(vmInstance)
 			vmi.Status.Phase = phase
 			fakeWatcher.Add(vmi)
-			time.Sleep(10 * time.Millisecond)
 		}
 
 		if shouldSucceed {
@@ -180,14 +183,15 @@ var _ = Describe("Runner", func() {
 
 		fakeWatcher, errChan := startVMIWatcher(karRunner)
 
-		vmi := NewVirtualMachineInstance(vmInstance)
 		for _, phase := range []v1.VirtualMachineInstancePhase{v1.Pending, v1.Scheduling, v1.Scheduled} {
+			vmi := NewVirtualMachineInstance(vmInstance)
 			vmi.Status.Phase = phase
 			fakeWatcher.Add(vmi)
 		}
 
-		vmi.Status.Phase = v1.Running
-		fakeWatcher.Add(vmi)
+		runningVMI := NewVirtualMachineInstance(vmInstance)
+		runningVMI.Status.Phase = v1.Running
+		fakeWatcher.Add(runningVMI)
 
 		readyVMI := NewVirtualMachineInstanceReady(vmInstance)
 		fakeWatcher.Modify(readyVMI)
@@ -195,8 +199,9 @@ var _ = Describe("Runner", func() {
 		// Running+Ready is only a milestone; the watcher must continue until Succeeded.
 		Consistently(errChan, 100*time.Millisecond).ShouldNot(Receive())
 
-		readyVMI.Status.Phase = v1.Succeeded
-		fakeWatcher.Modify(readyVMI)
+		succeededVMI := NewVirtualMachineInstanceReady(vmInstance)
+		succeededVMI.Status.Phase = v1.Succeeded
+		fakeWatcher.Modify(succeededVMI)
 
 		Eventually(errChan, timeout).Should(Receive(BeNil()))
 	})
@@ -214,6 +219,17 @@ var _ = Describe("Runner", func() {
 		fakeWatcher.Add(vmi)
 
 		Eventually(errChan, timeout).Should(Receive(MatchError("timeout while waiting for the virtual machine instance")))
+	})
+
+	It("returns the parent context error when canceled while watching", func() {
+		const timeout = 1 * time.Second
+
+		ctx, cancel := context.WithCancel(context.Background())
+		_, errChan := startVMIWatcherWithContext(karRunner, ctx)
+
+		cancel()
+
+		Eventually(errChan, timeout).Should(Receive(MatchError(context.Canceled)))
 	})
 })
 

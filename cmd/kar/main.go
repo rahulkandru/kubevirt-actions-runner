@@ -172,7 +172,7 @@ func getClientAndNamespace() (kubecli.KubevirtClient, string, error) {
 }
 
 func runMainApp(ctx context.Context, opts app.Opts, kr runner.Runner, log utils.Logger) {
-	rootCmd := app.NewRootCommand(ctx, kr, opts)
+	rootCmd := app.NewRootCommand(ctx, kr, opts, ensureValidCleanupContext)
 
 	execErr := rootCmd.Execute()
 	if execErr != nil && !errors.Is(errors.Cause(execErr), context.Canceled) {
