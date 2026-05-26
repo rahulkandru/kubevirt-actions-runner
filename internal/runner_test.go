@@ -215,6 +215,28 @@ var _ = Describe("Runner", func() {
 
 		Eventually(errChan, timeout).Should(Receive(MatchError("timeout while waiting for the virtual machine instance")))
 	})
+
+	It("returns context canceled when the parent context is canceled", func() {
+		const timeout = 1 * time.Second
+
+		fakeWatcher := watch.NewFake()
+		vmiInterface := kubecli.NewMockVirtualMachineInstanceInterface(mockCtrl)
+		vmiInterface.EXPECT().Watch(gomock.Any(), gomock.Any()).Return(fakeWatcher, nil).MinTimes(1)
+		virtClient.EXPECT().VirtualMachineInstance(k8sv1.NamespaceDefault).Return(vmiInterface).AnyTimes()
+		runner.NewAppContext(vmInstance, "")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		errChan := make(chan error, 1)
+
+		go func() {
+			errChan <- karRunner.WaitForVirtualMachineInstance(ctx)
+			close(errChan)
+		}()
+
+		cancel()
+
+		Eventually(errChan, timeout).Should(Receive(MatchError(context.Canceled)))
+	})
 })
 
 func NewVirtualMachine(name string) *v1.VirtualMachine {
