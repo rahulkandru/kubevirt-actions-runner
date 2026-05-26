@@ -175,7 +175,11 @@ func (rc *KubevirtRunner) WaitForVirtualMachineInstance(ctx context.Context) err
 	for {
 		select {
 		case <-ctx.Done():
-			return errWaitTimeout
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return errWaitTimeout
+			}
+
+			return ctx.Err()
 		case event, watchOpen := <-watch.ResultChan():
 			if !watchOpen {
 				return errWatchChannelClosed
